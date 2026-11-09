@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geotables"
+version = "0.0.1.dev0"
+description = "Translate gridded geospatial data into AI-ready tables, with trackable sample design and dataset subsets."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Aiman Soliman" }]
+requires-python = ">=3.10"
+dependencies = [
+    "rasterio",
+    "geopandas",
+    "pyarrow",
+]
+
+[project.optional-dependencies]
+hf = ["datasets"]
+dev = ["pytest"]
+
+[project.scripts]
+geotables = "geotables.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

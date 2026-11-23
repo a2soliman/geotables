@@ -32,6 +32,50 @@ The chunk-processing core (Sampler slice → MaskFilter → Extractor → Writer
 
 I considered building this on Dask instead of directly on SLURM. Decided against it: the workload has no shuffles or joins between samples — it's embarrassingly parallel — so a second-level task scheduler on top of SLURM's own scheduler would have added a dependency and a layer of indirection without solving a problem that exists. The `Runner` abstraction is exactly what keeps this decision cheap to revisit: a `SparkRunner` or `DaskRunner` for users who already run those clusters (common on cloud data platforms) is a new, isolated Runner implementation later, not a rework of anything above.
 
+## Data flow diagram
+
+Visual version of [`DATAFLOW.md`](./DATAFLOW.md)'s table — regenerate this whenever that table changes, same discipline `scripts/check_dataflow.py` enforces between the table and the code, just applied by hand since a diagram isn't something CI can check automatically. Nothing below is built yet (all of #1-#10 are still open); this is drawn now because the contracts in `DATAFLOW.md` already exist and reviewing the shape of the pipeline doesn't need working code first.
+
+```mermaid
+graph TD
+    RASTER["raster source + grid params<br/>(tile_size, mode, overlap, count)"] --> SAMPLER
+    CHUNKID["chunk id"] --> SAMPLER
+    SAMPLER["sampler.py<br/>GeoDataFrame[geometry, sample_id]"]
+
+    SAMPLER --> MASK
+    MASKSRC["mask source (raster class map or vector layer)<br/>+ target class(es) + coverage rule"] --> MASK
+    MASK["maskfilter.py<br/>filtered GeoDataFrame[geometry, sample_id]"]
+
+    MASK --> EXTRACT
+    SOURCES["configured sources<br/>(path, role, resampling_method, optional scales)"] --> EXTRACT
+    EXTRACT["extractor.py<br/>(dict[str, ndarray], metadata: dict)"]
+
+    EXTRACT --> WRITER
+    OUTDIR["output_dir"] --> WRITER
+    WRITER["writer.py<br/>GeoParquet, one file per chunk"]
+
+    WRITER --> DATASET["GeoParquet dataset dir<br/>(one file per chunk)"]
+
+    DATASET --> SUBSET
+    FILTERDEF["filter query or seeded random selection + name"] --> SUBSET
+    SUBSET["subset.py<br/>named subset manifest"]
+
+    DATASET --> HF
+    HF["hf_export.py<br/>HF datasets.Dataset + dataset card<br/>(+ optional hub push)"]
+
+    CHUNKIDS["list of chunk ids"] --> RUNNER
+    RUNNER["runner.py<br/>LocalRunner / SLURMArrayRunner<br/>invokes Sampler→MaskFilter→Extractor→Writer once per chunk id"]
+    RUNNER -.drives one call per chunk id.-> SAMPLER
+
+    CLI["cli.py"] -->|extract| RUNNER
+    CLI -->|subset| SUBSET
+    CLI -->|to-hf| HF
+```
+
+## Result-level flows
+
+The diagram above is the whole pipeline. For any one output artifact, that's more detail than needed and hides a question the pipeline diagram can't answer: exactly which functions and which intermediate values feed *this* result? Each deliverable-level artifact (the GeoParquet dataset, a named subset manifest, the HF export) gets its own flow diagram here, added in the same PR that implements the code producing it — same plain-box Mermaid convention as above, rendered to SVG locally to confirm the syntax before pushing. None exist yet since nothing's been implemented; the first one goes here once #4 (LocalRunner + CLI, the first end-to-end extract run) ships.
+
 ## What's deliberately not in v1
 
 Feature-table output (one row per pixel instead of per chip), stratified/spatially-balanced/space-filling-curve sampling beyond grid and class-filtered selection, NetCDF/HDF/Zarr input sources, Delta Lake/Iceberg writers, write-back of model predictions to a georeferenced mosaic, and WebDataset export are all out of scope for the first working version. The architecture doesn't foreclose any of them — the decoupled stages and the Runner abstraction exist partly so they can be added later without rearchitecting — but v1 is deliberately the smallest slice that proves the core idea end to end.
